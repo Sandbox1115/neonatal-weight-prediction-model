@@ -1,7 +1,7 @@
 
 # Neonatal weight prediction statistical model
 
-This project is my solution to an inferential statistics task assigned using a neonatal healtcare dataset containing raw pregnancies data from three hospitals. I used R, RStudio and relevant R packages to extract core informations from the dataset, through Exploratory Data Analysis, and use the results to build a multiple linear regression model for neonatal weight prediction. This was developed for a first-level postgraduate master’s program at ProfessionAi.
+This project is my solution to an inferential statistics task assigned using a neonatal healtcare dataset containing raw pregnancies data from three hospitals. I used R, RStudio and relevant R packages to extract core informations from the dataset, through Exploratory Data Analysis, and use the results to build a **multiple linear regression model for neonatal weight prediction**. This was developed for a first-level postgraduate master’s program at ProfessionAi.
 
 ## Overview and goals
 
