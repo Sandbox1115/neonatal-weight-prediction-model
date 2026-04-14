@@ -1,0 +1,1378 @@
+---
+title: "Statistical model for predicting neonatal weight"
+author: "Giulio Pratola"
+date: "`r Sys.Date()`"
+output:
+  html_document: default
+  pdf_document: default
+---
+
+# **Development of a predictive statistical model for neonatal weight.**
+
+We obtained from **Neonatal Health Solutions** a dataset containing data from three hospitals managed by the company, with the goal of building a predictive model capable of estimating neonatal weight based on the variables included in the dataset.
+
+## **Preliminary analysis variables descriptive study.**
+
+Let's load the dataset into a data frame and print the first rows to get an idea of the objects and variables we have.
+
+```{r}
+neonatalcare_data = read.csv("neonati.csv")
+
+str(neonatalcare_data)
+head(neonatalcare_data)
+```
+
+The data frame contains 2500 ovservations for 10 different variables. They concern records related to births that occurred in the company's three hospitals, both for the newborn and for the mothers.
+
+Specifically, we have raw information for:
+
+-   Anni.Madre - Mother's age at the time of delivery - **Continuous quantitative variable on a ration scale;**
+
+-   N.gravidanze - Number of pregnancies the mother had priori to the delivery in question - **Discrete quantitative variable on a ratio scale;**
+
+-   Fumatrici - Observation regarding the mother's smoking status. Recorded using No/Yes 0/1 scheme- **Categorical variable encoded on a nominal scale;**
+
+-   Gestazione - Gestation time of the fetus expressed in weeks - **Continuous quantitative variable on a ratio scale;**
+
+-   Peso - Newborn weight, measured at birth, expressed in grams - **Continuous quantitative variable on a ratio scale;**
+
+-   Lunghezza - Newborn length at birth, expressed in millimiters - **Continuous quantitative variable on a ratio scale;**
+
+-   Cranio - Newborn head diameter measured at birth, expressed in millimiters - **Continuous quantitative variable on a ratio scale;**
+
+-   Tipo.parto - Type of delivery of the newborn, Natural or Cesarean, indicated with "Nat" or "Ces" - **Categorical variable on a nominal scale;**
+
+-   Ospedale - Hospital where the delivery took place. Encoded as "osp1", "osp2", "osp3" - **Categorical variable on a nominal scale;**
+
+-   Sesso - Newborn sex - encoded as "M" for males and "F" for females - **Categorical variable on a nominal scale;**
+
+Based on this preliminary analysis of variable types, we identify Peso as our **response variable**, while the others will be **explanatory variables** in our model.
+
+#### **Variables Descriptive analysis.**
+
+#### **Anni.madre:**
+
+```{r, warning=FALSE, message=FALSE}
+attach(neonatalcare_data)
+
+agen_distribution = table(Anni.madre)
+agen_frtable = agen_distribution/sum(agen_distribution)
+age_cumsum = cumsum(agen_distribution)
+age_cumrel = age_cumsum/sum(agen_distribution)
+
+final_agetable = cbind(ni=agen_distribution, fi=agen_frtable, Ni=age_cumsum, Fi=age_cumrel)
+colnames(final_agetable) = c("Absolute Fr.", "Relative Fr.", "Cumulated absolute fr.", "Cumulated relative fr.")
+knitr::kable(final_agetable)
+```
+
+```{r}
+summary(Anni.madre)
+```
+
+```{r, warning=FALSE, message=FALSE}
+library("moments")
+mother_age_data = data.frame(
+  Skewness = round(skewness(Anni.madre), 2), 
+  Kurtosis = round(kurtosis(Anni.madre)-3, 2),
+  St_dev = round(sd(Anni.madre), 2)
+)
+
+knitr::kable((mother_age_data), "pipe")
+```
+
+Observing a summary of the measures of central tendency, variability and shape for anni.madre, as well as frequency table of the observations, we immediately notice two anomalous births recorded for this variable, maybe transcription errors, corresponding to mothers aged 0 and 1 year at delivery.
+
+Excluding these two data points, the minimum for anni.madre would be 13 instead of 0. The difference between the mean and the median (28.16 vs 28) is not large enough to suggest that the two outliers have significantly affected the measures of central tendency. As shown in the frequency table, 0 and 1 relative frequencies smaller than 0.000 across the n observations.
+
+Proceed to plot the density curve of the distribution for anni.madre:
+
+```{r}
+library("ggplot2")
+ggplot()+
+  geom_density(aes(x=Anni.madre), col="black", fill="turquoise")+
+  geom_vline(xintercept = mean(Anni.madre), linewidth=1.5, color = "lightcoral")+
+  labs(x="Woman in labour age", y="Density", title = "Anni.madre variable", subtitle = "Distribution density curve")+
+  geom_text(aes(x = mean(Anni.madre) + 5, y = 0.075, label = sprintf("Mean\n %.3f", mean(Anni.madre))), inherit.aes = FALSE) +
+  ylim(0, 0.08)+
+  theme_minimal()+
+  theme(
+    panel.grid = element_blank(),
+    plot.title = element_text(hjust = 0.5, face = "bold"),
+    plot.subtitle = element_text(hjust = 0.5)
+  )
+```
+
+With a skewness of 0.04, the density curve of the anni.madre distribution shows an almost negligible positive skew, while a kurtosis of 0.38 indicates a leptokurtic curve.
+
+#### **N.gravidanze:**
+
+```{r, warning=FALSE, message=FALSE}
+birthn_distribution = table(N.gravidanze)
+birthn_frtable = birthn_distribution/sum(birthn_distribution)
+birth_cumsum = cumsum(birthn_distribution)
+birth_cumrel = (birth_cumsum/sum(birthn_distribution))
+
+final_birthtable = cbind(ni=birthn_distribution, fi=birthn_frtable, Ni=birth_cumsum, Fi=birth_cumrel)
+colnames(final_birthtable) = c("Absolute Fr.", "Relative Fr.", "Cumulated absolute fr.", "Cumulated relative fr.")
+knitr::kable(final_birthtable)
+
+summary(N.gravidanze)
+```
+
+```{r}
+prior_birth_data = data.frame(
+  Skewness = round(skewness(N.gravidanze), 2), 
+  Kurtosis = round(kurtosis(N.gravidanze)-3, 2),
+  St_dev = round(sd(N.gravidanze), 2)
+)
+knitr::kable((prior_birth_data), "pipe")
+```
+
+As shown by the analysis of N.gravidanze, most observations (76.56%) for the number of pregnancies the mother had at the time of delivery are concentrated at 1, with gradually fewer observations as we move toward higher numbers of previous pregnancies (up to 12).
+
+We expect a skewed right distribution, as indicated by a positive skewness of 2.51, with low values prevailing.
+
+```{r}
+ggplot() +
+  geom_bar(
+    aes(x = as.factor(N.gravidanze)),
+    fill = "lightblue", color = "black", alpha = 0.7
+  ) +
+  labs(
+    x = "Number of pregnancies",
+    y = "Frequency",
+    title = "N.gravidanze variable",
+    subtitle = "Pregnancies distribution"
+  ) +
+  theme_minimal() +
+  theme(
+    panel.grid = element_blank(),
+    plot.title = element_text(hjust = 0.5, face = "bold"),
+    plot.subtitle = element_text(hjust = 0.5)
+  )
+```
+
+Since this is a discrete variable, we use a barplot to visualize the distribution, obtaining graphical confirmation of the prevalence of 0 and 1 pregnancies in the total observations and of a strong positive skew.
+
+#### **Fumatrici:**
+
+```{r}
+smokerstable = table(Fumatrici)
+knitr::kable((smokerstable), "pipe")
+
+smokersperc = round((104*100)/2500, 2)
+knitr::kable(smokersperc)
+```
+
+```{r, fig.width=6, fig.height=8, warning=FALSE, message=FALSE}
+ggplot() +
+  geom_bar(
+    aes(x = as.factor(Fumatrici)),
+    fill = "lavenderblush4", color = "black", alpha = 0.7
+  ) +
+  labs(
+    x = "Non-smokers/Smokers",
+    y = "Observations",
+    title = "Fumatrici variable",
+    subtitle = "Tobacco usage habits during pregnancy among the n observations"
+  ) +
+  theme_minimal() +
+  theme(
+    panel.grid = element_blank(),
+    plot.title = element_text(hjust = 0.5, face = "bold"),
+    plot.subtitle = element_text(hjust = 0.5)
+  )
+```
+
+For the variable Fumatrici, we observe 2396 non-smoking mothers versus 104 smoking mothers. As shown in the second table, the "fumatrici" value represents 4.16% of total observations.
+
+We will leave more in-depth assessments to healthcare personnel; however [an information notice from the Ministry of Health](https://www.salute.gov.it/portale/fumo/dettaglioContenutiFumo.jsp?id=5583&area=fumo&menu=vuoto) dated 29 May 2024 indicates that children of smoking mothers have a 70% excess risk of lower respiratory tract diseases.
+
+[A 2013 statistical survey](https://www.epicentro.iss.it/fumo/WTD2013Gravidanza) on a sample of n = 4953 women, conducted by the Istituto Superiore di Sanità, also found that within a subgroup where 23% were smokers, only 70% quit smoking during pregnancy, suggesting a potential underestimation of observations coded as 1 in our dataset. The study is not recent enough to be fully valid for 2024, but it may still indicate a tendency in the available data. A time series check from 2013 onward should be performed to determine whether the overall trend in smokers today is compatible with our dataset, comparing it to the reference population of the three hospitals and verifying whether local trends are correlated with national ones.
+
+The same ISS report also notes positive effects on the prolonged mantenance of good health practices by mothers following pregnancy. Further study of this risk factor is recommended.
+
+#### **Gestazione:**
+
+```{r}
+pln_distribution = table(Gestazione)
+pln_frtable = pln_distribution/sum(pln_distribution)
+pl_cumsum = cumsum(pln_distribution)
+pl_cumrel = pl_cumsum/sum(pln_distribution)
+
+final_pltable = cbind(ni=pln_distribution, fi=pln_frtable, Ni=pl_cumsum, Fi=pl_cumrel)
+colnames(final_pltable) = c("Absolute Fr.", "Relative Fr.", "Cumulated absolute fr.", "Cumulated relative fr.")
+knitr::kable(final_pltable)
+```
+
+```{r}
+summary(Gestazione)
+```
+
+```{r}
+pregnancy_length_data = data.frame(
+  Skewness = round(skewness(Gestazione), 2), 
+  Kurtosis = round(kurtosis(Gestazione)-3, 2),
+  st_dev = round(sd(Gestazione), 2)
+)
+knitr::kable(pregnancy_length_data)
+```
+
+According to the definition of ["preterm infant" provided by the Ospedale Bambino Gesù in Rome](https://www.ospedalebambinogesu.it/neonato-pretermine-80529/), it is necessary to examine the dataset for births occurring before 37 weeks in order to identify cases potentially requiring clinical attention and intervention.
+
+In the sample observations available, 14.16% of pregnancies have a duration equal to or less than 37 weeks, while the mean pregnancy duration is 39 weeks (38.98) and the minimum of the distribution is 25. 84.52% of observed cases fall within 40 weeks.
+
+Shape indices return a negative skew with a prevalence of high values and a leptokurtosis of the distribution's density curve. Due to the discrete nature of the variable we prefer to display it with a barplot.
+
+```{r}
+ggplot() +
+  geom_bar(
+    aes(x = as.factor(Gestazione)),
+    fill = "wheat", color = "black", alpha = 0.7
+  ) +
+  labs(
+    x = "Weeks in pregnancy",
+    y = "Frequency",
+    title = "Gestazione variable",
+    subtitle = "pregnancy weeks distribution"
+  ) +
+  theme_minimal() +
+  theme(
+    panel.grid = element_blank(),
+    plot.title = element_text(hjust = 0.5, face = "bold"),
+    plot.subtitle = element_text(hjust = 0.5)
+  )
+```
+
+#### **Peso:**
+
+```{r}
+weight_class = cut(Peso, breaks = seq(500,5000, by=500), 
+                   left=FALSE,
+                   labels = paste0("(", seq(500,4500, by=500), "-", seq(1000,5000, by=500), "]")
+                   )
+weightn_distribution = table(weight_class)
+weightn_frtable = weightn_distribution/sum(weightn_distribution)
+weight_cumsum = cumsum(weightn_distribution)
+weight_cumrel = weight_cumsum/sum(weightn_distribution)
+
+final_weighttable = cbind(ni=weightn_distribution, fi=weightn_frtable, Ni=weight_cumsum, Fi=weight_cumrel)
+colnames(final_weighttable) = c("Absolute Fr.", "Relative Fr.", "Cumulated absolute fr.", "Cumulated relative fr.")
+knitr::kable(final_weighttable)
+```
+
+```{r}
+summary(Peso)
+```
+
+```{r}
+weight_data = data.frame(
+  Skewness = round(skewness(Peso), 2), 
+  Kurtosis = round(kurtosis(Peso)-3, 2),
+  St_dev = round(sd(Peso), 2)
+)
+knitr::kable(weight_data)
+```
+
+For the preliminary analysis of the variable Peso, considering that, according to the guidelines from Ospedale Bambino Gesù in Rome cited above, a newborn is considered potentially preterm if it has a weight less than or equal to 2500g, we prefer to create right-closed classes to build a frequency table that highlights how observations below 2500g account for 5.8% of the total sample, warranting attention from healthcare personnel.
+
+There is not a large difference between the mean and the median, an indication that we are unlikely to have outliers affecting the results. The negative skew indicates a tendency of the distribution toward higher values, with a leptokurtic curve.
+
+Let's build the distribution density curve:
+
+```{r}
+ggplot()+
+  geom_density(aes(x=Peso), col="black", fill="thistle")+
+  geom_vline(xintercept = mean(Peso), linewidth=1.5, color = "lightcoral")+
+  labs(x="Newborn weight at birth (g)", y="Density", title = "Peso variable", subtitle = "Distribution density curve")+
+  geom_text(aes(x = mean(Peso) + 1000, y = 8e-04, label = sprintf("Mean\n %.3f", mean(Peso))), inherit.aes = FALSE) +
+  ylim(0, 9e-04)+
+  theme_minimal()+
+  theme(
+    panel.grid = element_blank(),
+    plot.title = element_text(hjust = 0.5, face = "bold"),
+    plot.subtitle = element_text(hjust = 0.5)
+  )
+```
+
+The previous observations are confirmed by the plot.
+
+Since the variable Peso will be our response variable in the regression model we will develop, we immediately perform a Shapiro test to check whether it follows a normal distribution.
+
+```{r}
+shapiro.test(Peso)
+```
+
+With a p-value effectively equal to zero and a W statistic of 0.97, we must reject the null hypothesis H0 of normality. For the Shapiro test, Peso does not follow a normal distribution; however, the central limit theorem may mitigate the effect of non-normality for datasets with a large number of observations. We will evaluate the effects on the model later.
+
+#### **Lunghezza:**
+
+```{r}
+length_class = cut(Lunghezza, breaks = seq(300,570, by=30), 
+                   left=FALSE,
+                   labels = paste0("(", seq(300,540, by=30), "-", seq(330,570, by=30), "]")
+                   )
+lengthn_distribution = table(length_class)
+lengthn_frtable = lengthn_distribution/sum(lengthn_distribution)
+length_cumsum = cumsum(lengthn_distribution)
+length_cumrel = length_cumsum/sum(lengthn_distribution)
+
+final_lengthtable = cbind(ni=lengthn_distribution, fi=lengthn_frtable, Ni=length_cumsum, Fi=length_cumrel)
+colnames(final_lengthtable) = c("Absolute Fr.", "Relative Fr.", "Cumulated absolute fr.", "Cumulated relative fr.")
+knitr::kable(final_lengthtable)
+```
+
+```{r}
+summary(Lunghezza)
+```
+
+```{r}
+length_data = data.frame(
+  Skewness = round(skewness(Lunghezza), 2), 
+  Kurtosis = round(kurtosis(Lunghezza)-3, 2),
+  St_dev = round(sd(Lunghezza), 2)
+)
+knitr::kable(length_data)
+```
+
+Most observations of the variable Lunghezza are concentrated in the 480-510 class (53.4%). [The average newborn length at birth](https://www.ospedalebambinogesu.it/da-0-a-30-giorni-come-si-presenta-e-come-cresce-80012/) is usually 500mm for males and 495mm for females according to the referenced source. Our dataset reflects this trend observed in other studies. The overall mean newborn length at birth is 494.7mm, with a median of 500mm and minimal deviation between the two measures.
+
+We observe a negative skew with a prevalence of high values and a leptokurtic curve.
+
+Let's plot the density curve now.
+
+```{r}
+ggplot()+
+  geom_density(aes(x=Lunghezza), col="black", fill="springgreen4")+
+  geom_vline(xintercept = mean(Lunghezza), linewidth=1.5, color = "lightcoral")+
+  labs(x="Newborn length at birth (mm)", y="Density", title = "Lunghezza variable", subtitle = "Distribution density curve")+
+  geom_text(aes(x = mean(Lunghezza) -30, y = 0.02, label = sprintf("Mean\n %.3f", mean(Lunghezza))), inherit.aes = FALSE) +
+  ylim(0, 0.025)+
+  theme_minimal()+
+  theme(
+    panel.grid = element_blank(),
+    plot.title = element_text(hjust = 0.5, face = "bold"),
+    plot.subtitle = element_text(hjust = 0.5)
+  )
+```
+
+#### **Cranio:**
+
+```{r}
+head_class = cut(Cranio, breaks = seq(220,400, by=20), 
+                   left=FALSE,
+                   labels = paste0("(", seq(220,380, by=20), "-", seq(240,400, by=20), "]")
+)
+headn_distribution = table(head_class)
+headn_frtable = headn_distribution/sum(headn_distribution)
+head_cumsum = cumsum(headn_distribution)
+head_cumrel = head_cumsum/sum(headn_distribution)
+
+final_headtable = cbind(ni=headn_distribution, fi=headn_frtable, Ni=head_cumsum, Fi=head_cumrel)
+colnames(final_headtable) = c("Absolute Fr.", "Relative Fr.", "Cumulated absolute fr.", "Cumulated relative fr.")
+knitr::kable(final_headtable)
+```
+
+```{r}
+summary(Cranio)
+```
+
+```{r}
+head_data = data.frame(
+  Skewness = round(skewness(Cranio), 2), 
+  Kurtosis = round(kurtosis(Cranio)-3, 2),
+  St_dev = round(sd(Cranio), 2)
+)
+knitr::kable(head_data)
+```
+
+For the variable Cranio, which records the newborn's head diameter at birth (or still in utero via ultrasound) in mm, most observations are concentrated below 360mm (93%). The minimum of 235mm and maximum of 390mm fall correctly within the class division.
+
+Median and mean coincide at 340mm. The curve has a negative skew with predominantly high values, and a positive kurtosis of 2.95 indicating a leptokurtic curve.
+
+Let's build the desntiy plot for the distribution.
+
+```{r}
+ggplot()+
+  geom_density(aes(x=Cranio), col="black", fill="mintcream")+
+  geom_vline(xintercept = mean(Cranio), linewidth=1.5, color = "lightcoral")+
+  labs(x="Newborn head diameter size at birth (mm)", y="Density", title = "Cranio variable", subtitle = "Distribution density curve")+
+  geom_text(aes(x = mean(Cranio) -20, y = 0.027, label = sprintf("Mean\n %.3f", mean(Cranio))), inherit.aes = FALSE) +
+  ylim(0, 0.03)+
+  theme_minimal()+
+  theme(
+    panel.grid = element_blank(),
+    plot.title = element_text(hjust = 0.5, face = "bold"),
+    plot.subtitle = element_text(hjust = 0.5)
+  )
+```
+
+#### **Tipo.parto:**
+
+```{r}
+birth_type = table(Tipo.parto)
+knitr::kable(birth_type)
+
+```
+
+```{r, fig.width=6, fig.height=8, warning=FALSE, message=FALSE}
+ggplot() +
+  geom_bar(
+    aes(x = as.factor(Tipo.parto)),
+    fill = "papayawhip", color = "black", alpha = 0.7
+  ) +
+  labs(
+    x = "Delivery type",
+    y = "Total observations",
+    title = "Tipo.parto variable",
+    subtitle = "Delivery observations by type"
+  ) +
+  theme_minimal() +
+  theme(
+    panel.grid = element_blank(),
+    plot.title = element_text(hjust = 0.5, face = "bold"),
+    plot.subtitle = element_text(hjust = 0.5)
+  )
+```
+
+```{r}
+birthtypeperc = round((728*100)/2500, 2)
+knitr::kable(birthtypeperc)
+```
+
+From the data observed in the three hospitals, we confirm that 29.12% of births occur by cesarean section, while the remainder are vaginal deliveries.
+
+#### **Ospedale:**
+
+```{r}
+hospital = table(Ospedale)
+knitr::kable(hospital)
+```
+
+```{r, fig.width=6, fig.height=8, warning=FALSE, message=FALSE}
+ggplot() +
+  geom_bar(
+    aes(x = as.factor(Ospedale)),
+    fill = "red", color = "black", alpha = 0.7
+  ) +
+  labs(
+    x = "Hospital",
+    y = "Total observations",
+    title = "Ospedale variable",
+    subtitle = "Birth distribution by hospitals"
+  ) +
+  theme_minimal() +
+  theme(
+    panel.grid = element_blank(),
+    plot.title = element_text(hjust = 0.5, face = "bold"),
+    plot.subtitle = element_text(hjust = 0.5)
+  )
+```
+
+The variable Ospedali shows a very similiar number of observations for all three facilities, with no significant variation in the count of observations for each facility individually.
+
+#### **Sesso:**
+
+```{r}
+gender = table(Sesso)
+knitr::kable(gender)
+```
+
+```{r, fig.width=6, fig.height=8, warning=FALSE, message=FALSE}
+ggplot() +
+  geom_bar(
+    aes(x = as.factor(Sesso)),
+    fill = "mediumslateblue", color = "black", alpha = 0.7
+  ) +
+  labs(
+    x = "Newborn gender",
+    y = "Total Observations",
+    title = "Sesso variable",
+    subtitle = "Newborn gender distribution"
+  ) +
+  theme_minimal() +
+  theme(
+    panel.grid = element_blank(),
+    plot.title = element_text(hjust = 0.5, face = "bold"),
+    plot.subtitle = element_text(hjust = 0.5)
+  )
+```
+
+No significant differences are observed between male and gemale births in the sample of 2500 newborns.
+
+## **Analysis of relationships between variables and newborn weight**
+
+#### **Genere sessuale and Peso relation:**
+
+Before evaluating relations between maternal variables and newborn weight, it is first worthwhile to check whether there is a natural weight difference between male and female newborns. We'll build the chart below.
+
+```{r, fig.width=6, fig.height=8, warning=FALSE, message=FALSE}
+
+library(dplyr)
+male_stats = neonatalcare_data %>%
+  filter(Sesso == "M") %>%
+  summarise(
+    Mean = mean(Peso, na.rm = TRUE),
+    Median = median(Peso, na.rm = TRUE),
+    St_dev = sd(Peso, na.rm = TRUE),
+    Minimum = min(Peso, na.rm = TRUE),
+    Maximum = max(Peso, na.rm = TRUE),
+    Quartile1 = quantile(Peso, 0.25, na.rm = TRUE),
+    Quartile3 = quantile(Peso, 0.75, na.rm = TRUE)
+  )
+
+female_stats = neonatalcare_data %>%
+  filter(Sesso == "F") %>%
+  summarise(
+    Mean = mean(Peso, na.rm = TRUE),
+    Median = median(Peso, na.rm = TRUE),
+    St_dev = sd(Peso, na.rm = TRUE),
+    Minimum = min(Peso, na.rm = TRUE),
+    Maximum = max(Peso, na.rm = TRUE),
+    Quartile1 = quantile(Peso, 0.25, na.rm = TRUE),
+    Quartile3 = quantile(Peso, 0.75, na.rm = TRUE)
+  )
+
+gender_weight_table = rbind(
+  Males = male_stats,
+  Females = female_stats
+)
+
+knitr::kable(gender_weight_table)
+
+ggplot(neonatalcare_data, aes(x = Sesso, y = Peso, fill = Sesso))+
+  geom_boxplot(outlier.colour = "lightcoral", outlier.size = 2, alpha = 0.7)+
+  labs(
+    title = "Weight distribution at birth",
+    subtitle = "By gender (F/M)",
+    x = "Gender",
+    y = "Weight (g)"
+  )+
+  scale_fill_manual(values = c("M" = "powderblue", "F" = "orchid"))+
+  theme_minimal()+
+  theme(
+    plot.title = element_text(hjust = 0.5, face = "bold"),
+    plot.subtitle = element_text(hjust = 0.5),
+    legend.position = "none"
+  )
+```
+
+Both the boxplots and the variability and central tendency indices for the weight distribution split by sex provide strong evidence that male newborns' birth weight is significantly different from female newborns'.
+
+To verify that the difference is statistically significant, we set the null hypothesis **"H0 = the mean weights of male and female newborns are equal"** and perform a Student's t-test below.
+
+```{r}
+t.test(Peso ~ Sesso, data = neonatalcare_data)
+```
+
+The test returns a p-value effectively equal to 0, indicating that the mean weight difference between male and female newborns is statistically significant, and therefore leads us to reject the null hypothesis H0 stated above.
+
+Is also indicates that, in our dataset, the mean weight of female newborns is lower than that of males by an amount ranging from 207.06 to 287.11 g at birth.
+
+#### **Ospedali and Peso relation:**
+
+Before considering maternal variables in relation to weight, it is also worth checking whether there are substantial differences in newborn weight across three hospitals separately.
+
+```{r, fig.width=6, fig.height=8}
+ggplot(neonatalcare_data, aes(x = Ospedale, y = Peso, fill = Ospedale))+
+  geom_boxplot(outlier.colour = "lightcoral", outlier.size = 2, alpha = 0.7)+
+  labs(
+    title = "Newborn weight distribution",
+    subtitle = "Split by hospitals",
+    x = "Hospital",
+    y = "Weight (g)"
+  )+
+  scale_fill_brewer(palette = "Pastel1")+
+  theme_minimal()+
+  theme(
+    plot.title = element_text(hjust=0.5, face = "bold"),
+    plot.subtitle = element_text(hjust = 0.5),
+  )
+```
+
+Graphical examination does not show significant differences in the weight distribution across the three hospitals in the dataset.
+
+#### **Newborn weight and delivery type relation:**
+
+```{r, fig.width=6, fig.height=8}
+ggplot(neonatalcare_data, aes(x = Tipo.parto, y = Peso, fill = Tipo.parto))+
+  geom_boxplot(outlier.colour = "lightcoral", outlier.size = 2, alpha = 0.7)+
+  labs(
+    title = "Newborn weight distribution by delivery type",
+    subtitle = "Cesarean vs Natural birth",
+    x = "Delivery type",
+    y = "Weight (g)"
+  )+
+  scale_fill_manual(values = c("Nat" = "forestgreen", "Ces" = "firebrick"))+
+  theme_minimal()+
+  theme(
+    plot.title = element_text(hjust = 0.5, face = "bold"),
+    plot.subtitle = element_text(hjust = 0.5),
+    legend.position = "none"
+  )
+```
+
+We observe graphically that there is no influence on the newborn weight distribution indices even when discriminating by delivery type.
+
+#### **Relation between newborn weight, delivery type and hospital:**
+
+We can further detail the analysis of the relation between variables by also checking whether, within each hospital, there are differences between vaginal and cesarean deliveries.
+
+```{r, fig.width=6, fig.height=8}
+ggplot(data = neonatalcare_data, aes(x = Tipo.parto, y = Peso, fill = Ospedale)) +
+  geom_boxplot(outlier.colour = "lightcoral", outlier.size = 2, alpha = 0.7) +
+  labs(title = "Newborn weight split by delivery type and hospitals",
+       x = "Delivery Type",
+       y = "Weight (g)") +
+  scale_fill_brewer(palette = "Pastel1")+
+  theme_minimal()
+```
+
+At first glance there appear to be fluctuations among the distributions of cesarean births when split by hospital, so we will proceed to perform a two-way ANOVA with the following null hypotheses H0:
+
+-   For "Tipo di Parto": there are no significant differences in mean newborn weights between cesarean and vaginal deliveries;
+
+-   For "Ospedale": there are no significant differences in mean newborn weights among the three hospitals;
+
+-   For "Interazione": there is no significant interaction between delivery type and hospital;
+
+This test will help to statistically verify what was observed in the two previous charts.
+
+```{r}
+anov_result = aov(Peso ~ Tipo.parto * Ospedale, data = neonatalcare_data)
+summary(anov_result)
+```
+
+As shown by the p-values, we fail to reject the null hypothesis H0 for this test, since for all three hypotheses the test indicates that there are no statistically significant differences either within groups or between groups.
+
+#### **Mother's age and newborn weight relation:**
+
+```{r, warning=FALSE, message=FALSE}
+ggplot(neonatalcare_data, aes(x = Anni.madre, y = Peso))+
+  geom_point(alpha = 0.6, color = "dodgerblue")+
+  geom_smooth(method = "lm", color = "darkorange", se = TRUE, linetype = "dashed")+
+  labs(
+    title = "Relation between mother's age and newborn weight",
+    x = "Mother's Age (in years)",
+    y = "Newborn Weight (in g)",
+    subtitle = "With linear regression line and confidence interval"
+  )+
+  theme_minimal()+
+  theme(
+    plot.title = element_text(hjust = 0.5, face = "bold"),
+    plot.subtitle = element_text(hjust = 0.5)
+  )
+```
+
+Plotting mother's age against newborn birth weight shows a concentration of values between 2500g and 4000g, as previously observed in the frequency table for Peso. Outlier values for mothers aged 0 and 1 are also noted in the dedicated section.
+
+There does not appear to be any significant relationship between the two variables, and the nearly horizontal regression line with its shown confidence interval confirms this.
+
+#### **Newborn weight and pregnancy number relation:**
+
+```{r, fig.width=6, fig.height=8}
+ggplot(neonatalcare_data, aes(x = factor(N.gravidanze), y = Peso, fill = factor(N.gravidanze))) +
+  geom_boxplot(outlier.colour = "lightcoral", outlier.size = 2, alpha = 0.7) +
+  labs(
+    title = "Weight distribution in relation to pregnancies number",
+    x = "Number of past pregnancies",
+    y = "Newborn weight (g)"
+  ) +
+  scale_fill_viridis_d() +
+  theme_minimal() +
+  theme(
+    plot.title = element_text(hjust = 0.5, face = "bold"),
+    legend.position = "none"
+  )
+```
+
+Using the boxplot above we relate newborn birth weight to the total number of pregnancies the mother has had in her medical history. We immediately note a large number of outliers up to 3 pregnancies, likely attributable to difficult or anomalous pregnancies. 
+
+We also observe no substantial differences in weight indices up to subjects with 6 total pregnancies, where the min/max shift and the interquartile range is much extended compared to other pregnancy count conditions. The same applies to individuals with 8,9 or 10 total pregnancies, which show markedly different indices compared to the initial conditions 0,1,2,3.
+
+We hypothesize however that since pregnancies greater than 2 become progressively less common up to 12, we do not have sufficient data in this area of the dataset to reliably verify the weight/number of pregnancies relations above 5 total pregnancies.
+
+We can further split the boxplot by male and female newborns to see whether the observed relationship trend between the variables holds when discriminating by sex.
+
+```{r, fig.width=9, fig.height=7}
+ggplot(neonatalcare_data, aes(x = factor(N.gravidanze), y = Peso, fill = factor(N.gravidanze))) +
+  geom_boxplot(outlier.colour = "lightcoral", outlier.size = 2, alpha = 0.7) +
+  labs(
+    title = "Newborn weight in relation to number of pregnancies",
+    subtitle = "Split by gender",
+    x = "Number of past pregnancies",
+    y = "Newborn weight (g)"
+  ) +
+  facet_wrap(~ Sesso) +
+  scale_fill_viridis_d() +
+  theme_minimal() +
+  theme(
+    plot.title = element_text(hjust = 0.5, face = "bold"),
+    plot.subtitle = element_text(hjust = 0.5),
+    legend.position = "none"
+  )
+```
+
+When we split the boxplot by female and male newborns, we observe that births from mothers with 5 total pregnancies also appear to show visually significant differences in the distribution indices; moreover, for males the boxplot for mothers with 9 total pregnancies loses significance, again supporting the idea that above five pregnancies we may not have sufficient observations.
+
+We also note that for mothers with 6 total pregnancies, males show a median line substantially higher than the others, while for females the median is around the 2,500 gram line, which could be problematic because it is indicative of a potentially premature newborn.
+
+In this case, we recommend enlarging the sample in future data collection to verify that the trends observed in the relationship between weight and number of pregnancies for mothers with more than five pregnancies are confirmed.
+
+#### **Tobacco usage habits and newborn weight relations:**
+
+```{r, fig.width=6, fig.height=8}
+ggplot(neonatalcare_data, aes(x= as.factor(Fumatrici), y = Peso, fill = as.factor(Fumatrici)))+
+  geom_boxplot(outlier.colour = "lightcoral", outlier.size = 2, alpha = 0.7)+
+  labs(
+    title = "Weight distribution at birth",
+    subtitle = "Smokers Vs. Non-smokers Mothers comparison",
+    x = "Tobacco usage habits (0: Non-smoker, 1: Smoker)",
+    y = "Newborn weight at birth (g)"
+  )+
+  scale_fill_manual(values = c("0"="tomato", "1" = "palegreen"),
+                    labels = c("Non-smokers", "Smokers"))+
+  theme_minimal()+
+  theme(
+    plot.title = element_text(hjust = 0.5, face = "bold"),
+    plot.subtitle = element_text(hjust = 0.5),
+    legend.position = "none"
+  )
+```
+
+We made a boxplot to compare the relations between maternal smoking habits and newborn weight. At first glance there appears to be a relationship as the median of the distribution for smoking mothers is slightly lower than that for non-smoking mothers.
+
+Note that the sample includes only 4.16% smoking mothers of the total n samples, so the data may be insufficient to reveal a clear trend.
+
+We nevertheless decide to perform a t-test with null hypothesis H0: "There is no difference between the mean weights of both groups" to verify whether the variations observed in the plot are statistically significant.
+
+```{r}
+t.test(Peso ~ Fumatrici, data = neonatalcare_data)
+```
+
+Having a p-value greater than 0.05 and a difference between means of only 50 grams, we consider that the difference in weight between infants born to smoking and non-smoking mothers is, on average, not statistically significant, nor likely to have a strong relation with neonatal birth weight. We therefore require a more in-depth analysis of the factors influencing neonatal birth weight. Let us proceed.
+
+#### **Gestation weeks, length, head circumference and weight relations:**
+
+Having investigated the relations between weight and gender, we can now proceed to examine the relations between weeks of gestation, length, head circumference and weight, in which we hypothesize an almost obvious linear correlation. We'll display the charts below.
+
+```{r, warning=FALSE, message=FALSE, fig.width=8, fig.height=6}
+ggplot(neonatalcare_data, aes(x= Gestazione, y = Peso))+
+  geom_point(alpha = 0.6, color = "steelblue")+
+  geom_smooth(method = "lm", se = TRUE, color = "darkorange", fill = "sandybrown")+
+  labs(
+    title = "Gestation weeks and newborn weight relations",
+    x = "Gestation weeks",
+    y = "Wight (g)"
+  )+
+  theme_minimal()+
+  theme(
+    plot.title = element_text(hjust = 0.5, face = "bold")
+  )
+
+ggplot(neonatalcare_data, aes(x= Lunghezza, y = Peso))+
+  geom_point(alpha = 0.6, color = "darkred")+
+  geom_smooth(method = "lm", se = TRUE, color = "darkorange", fill = "sandybrown")+
+  labs(
+    title = "Length and newborn weight relations",
+    x = "Length",
+    y = "Weight (g)"
+  )+
+  theme_minimal()+
+  theme(
+    plot.title = element_text(hjust = 0.5, face = "bold")
+  )
+
+ggplot(neonatalcare_data, aes(x= Cranio, y = Peso))+
+  geom_point(alpha = 0.6, color = "coral4")+
+  geom_smooth(method = "lm", se = TRUE, color = "darkorange", fill = "sandybrown")+
+  labs(
+    title = "Head diamater and newborn weight relations",
+    x = "Head diameter",
+    y = "Weight (g)"
+  )+
+  theme_minimal()+
+  theme(
+    plot.title = element_text(hjust = 0.5, face = "bold")
+  )
+```
+
+We identify a strong positive linear correlation between neonatal weight and gestation weeks. The same holds for weight with head circumference and length: as these three variables increase, neonatal weight also increases on average.
+
+## **Building of a multiple linear regression model and optimal model selection.**
+
+Having established that not all dataset variables have a strong linear relationship with neonatal weight, and that the variables may affect it differently, we build a multiple linear regression model to understand how all variables act on neonatal weight and which are not relevant for our statistical investigation specifically.
+
+We will first build a correlation matrix to perform a preliminary analysis of the correlations among variables and obtain a summary.
+
+```{r, fig.width=9, fig.height=7, warning=FALSE, message=FALSE}
+library(dplyr)
+
+panel.cor = function(x, y, digits = 2, prefix = "", cex.cor, ...)
+{
+  usr = par("usr"); on.exit(par(usr))
+  par(usr = c(0, 1, 0, 1))
+  r = (cor(x, y))
+  txt = format(c(r, 1), digits = digits)[1]
+  txt = paste0(prefix, txt)
+  if(missing(cex.cor)) cex.cor = 0.8/strwidth(txt)
+  text(0.5, 0.5, txt, cex = 1.5)
+}
+
+data_select = neonatalcare_data %>%
+  select(Peso, Anni.madre, N.gravidanze, Gestazione, Lunghezza, Cranio)
+
+pairs(data_select, lower.panel=panel.cor, upper.panel = panel.smooth)
+```
+
+From the correlation matrix we immediately note that Gestation and Weight have a correlation factor of 0.6, as previously observed, so the gestation variable has an influence on neonatal weight worth exploring.
+
+As weight increases with advancing through gestation weeks, we hypothesize that fetal/infant dimensions in terms of length also increase, which is why we observe a correlation between Gestation, Length and head diameter that translates into correlations of 0.8 and 0.7 with Weight respectively.
+
+The scatterplots show that all three variables positively influence Weight, so they should be included in our model. We do not observe a significant correlation of other variables with Weight.
+
+Given the above considerations, and the earlier ones from the relations analysis, we will take everything into account when building our model.
+
+#### **Building an initial test model using all variables:**
+
+We develop the first version of our multiple linear regression model below by including all quantitative variables from the dataset, and examine the results so we can improve it further. We will use the stepwise procedure, performing a general analysis and then removing variables one by one to arrive at a parsimonious model with the highest possible predictive power overall.
+
+```{r}
+model_1 = lm(Peso ~ Anni.madre + N.gravidanze +  Fumatrici + Gestazione + Lunghezza + Cranio + Sesso, data = neonatalcare_data)
+summary(model_1)
+```
+
+Let's start by the most important results. The value of our adjusted coefficient of determination (adjusted R-squared) is 0.7264, indicating that the model built this way can already be considered a good one, since it explains 72.64% of variability alone in newborn weight. 
+
+With such a small p-value we know the model is highly significant in general.
+
+Of all the variables considered, Anni.madre and Fumatrici do not significantly influence the response, exceeding 0.05 with a much higher p-value. In the next test models we will remove these two variables one at a time and observe the effects on the model to understand how it responds.
+
+The number of pregnancies, however, with 0.0158 is statistically significant, since an increase in the number of pregnancies is associated, on average, with a increase of 11.28g in newborn weight for each prior pregnancy.
+
+Let's remove the Anni.madre variable from the model and observe the results.
+
+```{r}
+model_2 = update(model_1,~. -Anni.madre)
+summary(model_2)
+```
+
+In the second test, the N.gravidanze variable has a lower p-value than in the first test, gaining greater significance and changing the average effect from 11.28 to 12.71 per prior pregnancy. The adjusted coefficient of determination slightly improved (0.7265), indicating an efficient and more parsimonious model
+
+Let's proceed to also remove the Fumatrici variable.
+
+```{r}
+model_3 = update(model_2, ~. -Fumatrici)
+summary(model_3)
+```
+
+The third test model removes the Fumatrici variable and confirms an adjusted percentage of 72.65% in explaining the variability of newborn weight.
+
+N.gravidanze experienced a slight increase in p-value but, considering that the residuals are still 274.6, that R-squared is unchanged, and that we have an optimal p-value overall, this is a change that makes model 3 simpler and with predictive performance even slightly improved compare to the other two.
+
+Let's now proceed to evaluate what happens if we remove N.gravidanze itself, which, among the statistically relevant variables considered has the highest p-value of all and the smallest impact in terms of influence on the response.
+
+```{r}
+model_4 = update(model_3, ~. -N.gravidanze)
+summary(model_4)
+```
+
+Removing N.gravidanze did not undermine the models' predictive quality for newborn weight. We note the adjusted coefficient of determination decreased slightly, but not in a statistically meaningful way, from 72.65% to 72.57%, keeping the proportion of explained variability nearly intact.
+
+Our p-value is still effectively zero and the residual spread did not change in a concerning way, moving from 274.6 to 275.
+
+The F-statistic, which communicates the overall quality of the model increased to 1654, leading us to consider the current version the simplest and a good candidate for a final model alongside model 3.
+
+For completeness and correctness in implementing the stepwise procedure, we will nevertheless list below the remaining attempts in which we will examine what happens if we remove one or more statistically relevant variables from the model.
+
+```{r}
+model_5 = update(model_4, ~. -Sesso)
+summary(model_5)
+
+model_6 = update(model_5, ~. -Cranio)
+summary(model_6)
+
+model_7 = update(model_6, ~. -Lunghezza)
+summary(model_7)
+```
+
+Although we previously established that weight differences between males and females are statistically significant when compared by their means, they do not influence newborn weight strongly enough to be equally significant in our models. In test number 5 we note that removing the Sesso variable still yields 72.03% of variability explained by Gestazione, Cranio and Lunghezza.
+
+This variant can therefore be considered the simplest one that still retains sufficient explanatory power without significantly affecting the residuals.
+
+We also note that when we remove Cranio and Lunghezza from the model much predictive power is lost, with a corresponding substantial increase in residual error. Explained variability drops to 64% and 35% respectively.
+
+Considering all tested variables of our model we deem model number 3, which includes Gestazione, Lunghezza, Cranio, Sesso and N.gravidanze, the most suitable to explain Peso variability in a simple, parsimonious, and accurate way given our observations. We will therefore leave Anni.madre and Fumatrici out of the model.
+
+Before proceeding to check the model residuals, however, we will perform a BIC test and a StepAIC test to confirm that model 3 is truly the best and that model 4 is not preferable.
+
+```{r}
+BIC(model_1, model_2, model_3, model_4, model_5, model_6, model_7)
+```
+
+```{r, warning=FALSE, message=FALSE}
+library(MASS)
+
+n = nrow(neonatalcare_data)
+stepwise.mod = MASS::stepAIC(model_1, direction = "both", k=log(n))
+summary(stepwise.mod)
+```
+
+As shown by the results from the BIC and StepAIC tests, in both cases the model with the lowest score is number three, which includes N.gravidanze, Gestazione, Sesso, Cranio and Lunghezza. This is exactly one of the two potential candidates so it is confirmed that it can be used.
+
+For further assurance we also proceed to check that there are no multicollinearity issues in model 3. We will performa a VIF test.
+
+```{r, message=FALSE, warning=FALSE}
+library(car)
+vif(model_3)
+```
+
+All VIF results are below the threshold of 5 so we are not in a situation of **multicollinearity**. This means the independent variables do not contain similiar information because they are not sufficiently correlated with each other to become problematic for the model. 
+
+Let's move onto the residual analysis
+
+#### **Analysis of the chosen model's quality.**
+
+Residual diagnostics of a model must satisfy the assumptions of linearity, normality, homoscedasticity, and independence.
+
+We will verify these assumptions by creating a diagnostic plot first.
+
+```{r, fig.width=8, fig.height=6}
+par(mfrow=c(2,2))
+plot(model_3)
+```
+
+-   **Residuals Vs Fitted:** residuals in the plot are randomly distributed around zero and show no funnel shapes or anomalous/systematic patterns so the assumptions of linearity and homoscedasticity of the residuals appear satisfied;
+
+-   **Q-Q Residuals:** Residuals should align along the dashed diagonal to satisfy normality; the tails tend to deviate from the line, so we will perform a Shapiro test for confirmation;
+
+-   **Scale-Location:** Points are again randomly distributed without funneling or systematic patterns, so the constant variance assumption for the residuals is respected;
+
+-   **Residuals vs Leverage:** As observed in the other plots we have potential outliers; however only observation 1551 appears potentially problematic because it exceeds the first warning threshold of 0.5 and approaches 1.
+
+Let's perform the Shapiro test on the residuals to verify the normality of the residuals' distribution.
+
+```{r}
+shapiro.test(residuals(model_3))
+```
+
+With a p-value practically equal to zero and a W of 0.97, the Shapiro test suggests rejecting H0 and therefore not considering the residual distribution as normal. 
+
+However we will also have a graphical check to be certain that no further action is necessary.
+
+```{r, fig.width=8, fig.height=6}
+residuals_3 = rstandard(model_3)
+
+plot(
+  density(residuals_3),
+  main = "Standardized residuals density curve for model 3",
+  xlab = "Standardized residuals",
+  ylab = "Density",
+  col = "olivedrab4",
+  lwd = 2
+)
+
+curve(
+  dnorm(x, mean = mean(residuals_3), sd = sd(residuals_3)),
+  col = "lightcoral",
+  lwd = 2,
+  add = TRUE
+  )
+
+legend("topright", 
+       inset = c(0, 0),
+       legend = c("Residuals density curve", "Normal Distribution"),
+       col = c("olivedrab4", "lightcoral"),
+       lwd = 2,
+       bty = "n"
+       )
+```
+
+We plot a normal distribution in red while in green the residuals' density curve for model 3. The residual curve is leptokurtic but does not appear to deviate substantially from a normal distribution, so we will proceed without making changes for now.
+
+To verify homoscedasticity assumption of the residuals, which did not appear visually violated, we perform a Breusch-Pagan test.
+
+```{r}
+lmtest::bptest(model_3)
+```
+
+With such a low p-value and a BP of 90.25, the test leads us to reject H0 hypothesis of homoscedasticity and suggests heteroscedasticity.
+
+It is possible that invidividual predictor variables with specific residual distribution patterns are influencing the BP. Based on previous analyses, we hypothesize that these may be the variables Gestation and N.gravidanze.
+
+We will verify below.
+
+```{r, fig.width=8, fig.height=6}
+plot(neonatalcare_data$Gestazione, resid(model_3),
+     main = "Residuals vs Gestazione",
+     xlab = "Gestazione", ylab = "Residuals")
+abline(h = 0, col = "red")
+
+plot(neonatalcare_data$N.gravidanze, resid(model_3),
+     main = "Residuals vs N.gravidanze",
+     xlab = "Gestazione", ylab = "Residuals")
+abline(h = 0, col = "red")
+```
+
+As observed in the chart, the two variables have residuals that display specific non-random patterns around zero, suggesting non-constant variance due to the absence of the random residual distribution pattern required by the test; additionally, they tend to increase or decrease with a funnel shape. We can therefore hypothesize that Gestation and N.gravidanze are influencing the BP test results and indicating heteroscedasticity.
+
+We will now perform checks on the outlier values noted during the preliminary residual analysis. We will begin with the outlier value analysis.
+
+```{r}
+plot(rstudent(model_3))
+abline(h=c(-2,2), col=2)
+car::outlierTest(model_3)
+```
+
+As shown by our OutlierTest, observations 1551, 155 and 1306 can be considered outliers. Of these, only 1551 is extremely significant and potentially highly influential, while 155 and 1306 are less extreme but still relevant.
+
+The plot highlights 1551 clearly; however there are no specific patterns, the randomness around zero is respected and we do not observe systematic patterns or clusters of outliers beyond the thresholds, they do not form a subpopulation so we do not believe there are prediction problems in the model.
+
+Let's check Cook's distance more closely now.
+
+```{r, fig.width=6, fig.height=8}
+plot(model_3, which = 4)
+points(1551, cooks.distance(model_3)[1551], col = "red", pch = 19)
+
+cook = cooks.distance(model_3)
+cookframe = data.frame(Cooks_max_distance = max(cook))
+knitr::kable((cookframe), "pipe")
+```
+
+Thanks to this second plot we confirm that 1551 is the only outlier that exceeds the 0.5 warning threshold, reaching a Cook's distance of 0.83, which places it very close to the critical threshold of 1.
+
+Let's perform a visual inspection of the outlier observations to determine whether there may be data entry or insertion issues in the dataset.
+
+```{r}
+my_outliers = neonatalcare_data[c(1551,155,1306),]
+knitr::kable((my_outliers), "pipe")
+```
+
+Compared to the dataset's typical means, 1551 appears to have a neonatal length that is too short for a weight of 4370g. Likewise, 155 shows a length well below the previously observed mean for that variable, thus anomalous, despite a weight that is above the variable's mean. All of this occurs for a gestational age one week below the threshold normally considered prenatal.
+
+It is plausible that these are erroneous measurements; therefore we will keep them in the dataset because they appear to be isolated cases and are not likely to invalidate the work done so far.
+
+However **this is a hypothesis based on our opinion,**, and consultation with medical staff is recommended to verify whether cases with these statistical values could in fact occur in reality.
+
+At this point we only have to assess the residual autocorrelation of the model variables to confirm the independence assumption.
+
+```{r}
+lmtest::dwtest(model_3)
+```
+
+The DW test suggests a slight positive autocorrelation among the variables, but since it is very close to two we are not concerned because we are essentially at an optimal value. The p-value of 0.12 also leads us not to reject the null hypothesis H0 of independent residuals. There is insufficient evidence to refute the assumption and invalidate the model.
+
+## **Use of the created model for statistical predictions**
+
+We now only need to use Model 3 to make statistical predictions of the mean birth weight of newborns, conditional to other variables.
+
+Let's proceed to verify what the mean birth weight would be for a newborn female with:
+
+-   Non-smoker mother;
+
+-   Three previous pregnancies;
+
+-   Thirthy-ninth week of gestation;
+
+```{r}
+forecast = predict(
+  model_3, 
+  newdata = data.frame(
+    Sesso = "F", 
+    N.gravidanze = 3, 
+    Gestazione = 39, 
+    Fumatrici = 0, 
+    Lunghezza = round(mean(Lunghezza), 2), 
+    Cranio = round(mean(Cranio), 2)
+    )
+  )
+
+forecast_data = data.frame (
+  Previsione = forecast,
+  Sesso = "F",
+  N.gravidanze = 3,
+  Gestazione = 39,
+  Fumatrici = 0,
+  Lunghezza_media = round(mean(Lunghezza), 2),
+  Cranio_medio = round(mean(Cranio), 2)
+)
+
+knitr::kable(forecast_data)
+```
+
+Our model estimates that, under the conditions listed above, the newborn female would weigh 3271.08g. To obtain this result we set Length and Head circumference to the distribution means, rounded to two decimal places.
+
+We will run two additional tests with different inputs to observe how the model behaves in prediction.
+
+These cases however, we will compute the expected values of Head circumference and Length based on the desired gestational weeks, so as not to bias any predictive attempt by always using the mean values mentioned above.
+
+We will also compute mean length and head circumference for the specified gestational weeks separately by sex, since we established that birth weight differences between male and female newborns are statistically significant and cannot be ignored, and this may in turn affect the average body dimensions of the newborn at birth.
+
+```{r}
+mean_gestazione = mean(Gestazione, na.rm=T)
+mean_lunghezza_M = mean(Lunghezza[Sesso == "M"], na.rm = TRUE)
+mean_cranio_M = mean(Cranio[Sesso == "M"], na.rm = TRUE)
+
+mean_lunghezza_F = mean(Lunghezza[Sesso == "F"], na.rm = TRUE)
+mean_cranio_F = mean(Cranio[Sesso == "F"], na.rm = TRUE)
+
+n_gestazione = 35
+lunghezza_forecast_M = round((n_gestazione / mean_gestazione) * mean_lunghezza_M, 2)
+cranio_forecast_M = round((n_gestazione / mean_gestazione) * mean_cranio_M, 2)
+
+lunghezza_forecast_F = round((n_gestazione / mean_gestazione) * mean_lunghezza_F, 2)
+cranio_forecast_F = round((n_gestazione / mean_gestazione) * mean_cranio_F, 2)
+
+forecast_2 = predict(
+  model_3, 
+  newdata = data.frame(
+    Sesso = "M", 
+    N.gravidanze = 0, 
+    Gestazione = n_gestazione, 
+    Fumatrici = 1, 
+    Lunghezza = lunghezza_forecast_M, 
+    Cranio = cranio_forecast_M
+  )
+)
+
+forecast_data2 = data.frame (
+  Previsione = forecast_2,
+  Sesso = "M",
+  N.gravidanze = 0,
+  Gestazione = n_gestazione,
+  Fumatrici = 1,
+  Lunghezza_media = lunghezza_forecast_M,
+  Cranio_medio = cranio_forecast_M
+)
+
+forecast_3 = predict(
+  model_3, 
+  newdata = data.frame(
+    Sesso = "F", 
+    N.gravidanze = 0, 
+    Gestazione = n_gestazione, 
+    Fumatrici = 1, 
+    Lunghezza = lunghezza_forecast_F, 
+    Cranio = cranio_forecast_F
+  )
+)
+
+forecast_data3 = data.frame (
+  Previsione = forecast_3,
+  Sesso = "F",
+  N.gravidanze = 0,
+  Gestazione = n_gestazione,
+  Fumatrici = 1,
+  Lunghezza_media = lunghezza_forecast_F,
+  Cranio_medio = cranio_forecast_F
+)
+
+knitr::kable(forecast_data2)
+knitr::kable(forecast_data3)
+```
+
+According to the model, a preterm newborn at 35 weeks born to a smoker mother with zero previous pregnancies is estimated to weigh 2367.287g for males and 2152.651g for females. Now we'll repeat the same prediction as before, distinguishing between males and females.
+
+```{r}
+
+n_gestazione = 39
+lunghezza_forecast_M = round((n_gestazione / mean_gestazione) * mean_lunghezza_M, 2)
+cranio_forecast_M = round((n_gestazione / mean_gestazione) * mean_cranio_M, 2)
+
+lunghezza_forecast_F = round((n_gestazione / mean_gestazione) * mean_lunghezza_F, 2)
+cranio_forecast_F = round((n_gestazione / mean_gestazione) * mean_cranio_F, 2)
+
+forecast_4 = predict(
+  model_3, 
+  newdata = data.frame(
+    Sesso = "M", 
+    N.gravidanze = 3, 
+    Gestazione = n_gestazione, 
+    Fumatrici = 0, 
+    Lunghezza = lunghezza_forecast_M, 
+    Cranio = cranio_forecast_M
+  )
+)
+
+forecast_data4 = data.frame (
+  Previsione = forecast_4,
+  Sesso = "M",
+  N.gravidanze = 3,
+  Gestazione = n_gestazione,
+  Fumatrici = 0,
+  Lunghezza_media = lunghezza_forecast_M,
+  Cranio_medio = cranio_forecast_M
+)
+
+forecast_5 = predict(
+  model_3, 
+  newdata = data.frame(
+    Sesso = "F", 
+    N.gravidanze = 3, 
+    Gestazione = n_gestazione, 
+    Fumatrici = 0, 
+    Lunghezza = lunghezza_forecast_F, 
+    Cranio = cranio_forecast_F
+  )
+)
+
+forecast_data5 = data.frame (
+  Previsione = forecast_5,
+  Sesso = "F",
+  N.gravidanze = 3,
+  Gestazione = n_gestazione,
+  Fumatrici = 0,
+  Lunghezza_media = lunghezza_forecast_F,
+  Cranio_medio = cranio_forecast_F
+)
+
+knitr::kable(forecast_data4)
+knitr::kable(forecast_data5)
+```
+
+We note that when distinguishing by gender and using Length and Head circumference values scaled to the corresponding means for the desired gestational weeks, the original company-requested prediction decreases by almost 100 grams to 3199.61g. A male newborn with the same maternal-variable conditions would have a predicted birth weight of 3429.97g.
+
+We will make three more predictions for 41 weeks of gestation.
+
+```{r}
+n_gestazione = 41
+lunghezza_forecast_M = round((n_gestazione / mean_gestazione) * mean_lunghezza_M, 2)
+cranio_forecast_M = round((n_gestazione / mean_gestazione) * mean_cranio_M, 2)
+
+lunghezza_forecast_F = round((n_gestazione / mean_gestazione) * mean_lunghezza_F, 2)
+cranio_forecast_F = round((n_gestazione / mean_gestazione) * mean_cranio_F, 2)
+
+forecast_6 = predict(
+  model_3, 
+  newdata = data.frame(
+    Sesso = "M", 
+    N.gravidanze = 1, 
+    Gestazione = n_gestazione, 
+    Fumatrici = 0, 
+    Lunghezza = lunghezza_forecast_M, 
+    Cranio = cranio_forecast_M
+  )
+)
+
+forecast_data6 = data.frame (
+  Previsione = forecast_6,
+  Sesso = "M",
+  N.gravidanze = 1,
+  Gestazione = n_gestazione,
+  Fumatrici = 0,
+  Lunghezza_media = lunghezza_forecast_M,
+  Cranio_medio = cranio_forecast_M
+)
+
+forecast_7 = predict(
+  model_3, 
+  newdata = data.frame(
+    Sesso = "F", 
+    N.gravidanze = 1, 
+    Gestazione = n_gestazione, 
+    Fumatrici = 0, 
+    Lunghezza = lunghezza_forecast_M, 
+    Cranio = cranio_forecast_M
+  )
+)
+
+forecast_data7 = data.frame (
+  Previsione = forecast_7,
+  Sesso = "F",
+  N.gravidanze = 2,
+  Gestazione = n_gestazione,
+  Fumatrici = 0,
+  Lunghezza_media = lunghezza_forecast_M,
+  Cranio_medio = cranio_forecast_M
+)
+
+forecast_8 = predict(
+  model_3, 
+  newdata = data.frame(
+    Sesso = "M", 
+    N.gravidanze = 6, 
+    Gestazione = n_gestazione, 
+    Fumatrici = 1, 
+    Lunghezza = lunghezza_forecast_M, 
+    Cranio = cranio_forecast_M
+  )
+)
+
+forecast_data8 = data.frame (
+  Previsione = forecast_8,
+  Sesso = "M",
+  N.gravidanze = 6,
+  Gestazione = n_gestazione,
+  Fumatrici = 1,
+  Lunghezza_media = lunghezza_forecast_M,
+  Cranio_medio = cranio_forecast_M
+)
+
+knitr::kable(forecast_data6)
+knitr::kable(forecast_data7)
+knitr::kable(forecast_data8)
+```
+
+After running some predictive tests with our model we check whether it is possible to visually demonstrate its overall predictive performance as well as the partial relationship between Weight and the predictors included in the model.
+
+#### **Model predictive-performance plots.**
+
+Before comparing the relationship between the observed values in the dataset and those predicted by our model, we can get a clearer idea of how the variables affect the model's predictive ability through these **partial dependence plot**.
+
+```{r, fig.width=8, fig.height=6, warning=FALSE, message=FALSE}
+library("effects")
+eff = allEffects(model_3)
+
+plot(eff, "N.gravidanze", main = "Effect of N.gravidanze on weight")
+plot(eff, "Gestazione", main = "Effect of Gestazione on weight")
+plot(eff, "Cranio", main = "Effect of Cranio on weight")
+plot(eff, "Lunghezza", main = "Effect of Lunghezza on weight")
+plot(eff, "Sesso", main = "Effect of Sesso on weight")
+```
+
+The plots above are intended to show how the dependent variable responds to changes in a single independent variable while holding the other model variables constant. For our Model 3, these plots help identify where the model's prediction range widens and becomes less precise, and where it remains consistent and reliable.
+
+All variables examined for this model show a positive linear relationship with weight, as previously established. Gestational age, Length, and Head circumference behave similarly: predictions cluster closely around the line when observations are near the mean of the independent variable, yielding more precise, realistic model estimates.
+
+The impact of independent variables becomes less precise as we move away from mean values. This is particularly evident for Gestational age: moving away from the mean of 40 weeks, the model's possible value range widens considerably around the line, indicating that Gestational age can substantially affect weight predictions.
+
+A more concerning effect is shown by Number of pregnancies: as the count exceeds six, the possible range of predicted weights becomes very broad, so, holding other variables constant it strongly influences predicted weight. This mirrors our earlier analysis, where we hypothesized that the scarcity of data for pregnancies above five makes the distribution's results imprecise and less reliable.
+
+The sex variable shows how the male-female difference shifts the model's baseline for predicted weight.
+
+Let's now plot our observed values against the values predicted by the model.
+
+```{r, fig.width=8, fig.height=6}
+ggplot(data.frame(Observed = neonatalcare_data$Peso, Predicted = fitted(model_3)), 
+       aes(x = Observed, y = Predicted)) +
+  geom_point(alpha = 0.6) +
+  geom_abline(intercept = 0, slope = 1, color = "red", linetype = "dashed") +
+  labs(title = "Model 3: Valori Predetti vs Osservati", x = "Peso Osservato", y = "Peso Predetto") +
+  theme_minimal()
+```
+
+The plot is populated with points representing both our dataset observations and the values predicted by Model 3, for the required conditions of the independent variables around that weight value. A precise, reliable model will show points scattered randomly around the red line, without showing non-random curves or specific patterns. Such patterns could indicate a violation of the residual homoscedasticity assumption or the presence of leverage points/outliers.
+
+In this case the model appears precise and reliable for the weight range from 2500g to 4000g, and begins to deviate from the line for values outside this range. In particular deviations are noticeable below 1200g and above 4500g.
+
+Any prediction yielding results below or above these thresholds may therefore be biased by the model and should be considered less reliable than predictions within the central weight range indicated. This effect may be partly explained by the impact of Number of pregnancies and Gestational age on weight, as observed in the earlier partial dependence plots.
+
+## **Final considerations**
+
+The exploration of the dataset provided by Neonatal Health Services yielded several interesting results and suggestions for the company to verify with extended data collection over time.
+
+First we found that the **incidence of maternal smoking** on newborn birth weight is not statistically relevant, at least not with the amount of data available for these two variables. We suspect underreporting in this part of the survey, so we recommend continuing data collection and performing further statistical analyses once more data are available.
+
+We also found no differences in newborn weight across the **three hospitals in the dataset,** and **maternal age and delivery type** do not have any statistically relevant influence on birth weight. By contrast, analyses confirm that male and female newborns show a statistically significant weight difference even when other variables are held equal.
+
+The mother's **number of previous pregnancies** may influence birth weight to an extent that should not be ignored in the model, particularly from five prior pregnancies onward; however we suspect there are simply too few observations for high parity to assert this with confidence. We therefore invite the company to continue data collection and expand the sample to enable further verification for mothers with many prior births.
+
+Note that **twin births are not mentioned** anywhere in the dataset, so the company may not be able to predict such cases adequately with the selected model. We suspect simultaneous gestation of two fetuses could affect average birth weight and should be included in future data collection.
+
+The variables found to have significant relations with the dependent variable Weight are **gestational age, length and head circumference,** with the latter two being particularly influential. As expected greater gestational age corresponds to higher birth weight; Length and head diameter also increase with gestation, with **no problematic multicollinearity** among the independent variables.
+
+Given these relationships we built a **multiple linear regression prediction model** using these independent variables. Model 3 explains 72.65% of the variability in Weight, achieving **good predictive performance**.
+
+Further checks indicate this model is reliable and usable for newborns whose predicted birth weight falls between 2500g and 4000g; reliability decreases above 4000g and below 1200g. For edge cases outside or near these thresholds, we recommend the company treat individual predictions cautiously and perform additional clinical assessments.
+
+Finally we recommend double-checking newly entered dataset values to avoid typographical or data-entry errors. We detected some problematic values due to entry mistakes. We suggest reviewing the flagged cases together with medical staff.
